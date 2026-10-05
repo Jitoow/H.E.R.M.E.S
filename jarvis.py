@@ -1,8 +1,10 @@
 import anthropic
 from dotenv import load_dotenv
+import subprocess
 
 load_dotenv()
 
+## Exercice 1 
 
 # réponses = {
 #     "bonjour": "Bonjour Monsieur.",
@@ -28,6 +30,7 @@ load_dotenv()
 #     else : 
 #         print("Je n'ai pas très bien compris Monsieur")
 
+### Exercice 2 
 
 historique = []
 système = """Tu es Hermes, l'assistant personnel vocal de Monsieur. Tu parles en français.
@@ -49,20 +52,31 @@ def demander_à_claude(question) :
     
     historique.append({"role": "user", "content": question})
 
-    reponsedeclaude =claude.messages.create(
+    textedeclaude =claude.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=200,
         system=système,
         messages=historique
     )
 
-    texte = reponsedeclaude.content[0].text
-    historique.append({ "role": "assistant", "content": texte })
+    reponsedeclaude = textedeclaude.content[0].text
+    historique.append({ "role": "assistant", "content": reponsedeclaude })
 
     #if len(historique) > 20 :
     #    historique = historique[-20:]
     
-    return texte
+    return reponsedeclaude
+
+## Exercice 2b
+
+def dire_piper(texte) :
+    piper = subprocess.run(
+    ["./piper/piper", "--model", "./voix/fr_FR-tom-medium.onnx", "--output_file", "réponse.wav"],
+    input=texte,
+    text=True
+)
+    lirepiper = subprocess.run(["paplay", "réponse.wav"])
+
 
 while True : 
     question = input('Comment puis-je vous aider ?')
@@ -71,4 +85,6 @@ while True :
         print("Au revoir")
         break 
     else : 
-        print(demander_à_claude(question))
+        reponse = demander_à_claude(question)
+        print(reponse)
+        dire_piper(reponse)
