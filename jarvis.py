@@ -91,7 +91,8 @@ def transcrire(audio) :
 def réponses_en_phrases(question) :
 
     boite = queue.Queue()
-
+    global historique
+    historique.append({"role": "user", "content": question})
     def loupe():
         while True:
             phrase = boite.get() # Il attend que boite se remplisse
@@ -103,15 +104,17 @@ def réponses_en_phrases(question) :
     fil.start()
 
     tampon = ""
+    réponsecomplète = ""
     with claude.messages.stream(
     max_tokens=200,
     system=système,
-    messages=[{"role": "user", "content": question}],
+    messages=historique,
     model="claude-haiku-4-5-20251001",
     ) as stream:
         for text in stream.text_stream:
             print(text, end="", flush=True)
             tampon += text
+            réponsecomplète += text
             while ". " in tampon or "! " in tampon or "? " in tampon:
                     positiondespoint = []
                     positiondespoint.append(tampon.find(". "))
@@ -127,9 +130,14 @@ def réponses_en_phrases(question) :
 
     boite.put(None)
     fil.join()
+    historique.append({ "role": "assistant", "content": réponsecomplète })
+
+    if len(historique) > 20 :
+        historique = historique[-20:]
 
 while True :
-    demande = input('Comment puis-je vous aider ? ')
+    demande = input('H.E.R.M.E.S/>  ')
+    print("")
     question = demande.lower().strip()
 
     if question == "au revoir" :
@@ -137,3 +145,4 @@ while True :
         break 
     else : 
         reponse = réponses_en_phrases(question)
+        print("")
