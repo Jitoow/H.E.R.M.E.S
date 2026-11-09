@@ -19,3 +19,4 @@ fichieraudio.writeframes(enregistrement.tobytes())
 fichieraudio.close()
 
 subprocess.run(['paplay', 'test_micro.wav'])
+sounddevice.get_stream
