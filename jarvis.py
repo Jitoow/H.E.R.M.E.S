@@ -247,7 +247,38 @@ def réponses_en_phrases(question) :
 # TODO : capter_phrase(stream) et interruption()
 
 
+def interruption(): 
+    global mode_écoute
+    stream = sounddevice.InputStream(samplerate=16000, device=14, channels=1, dtype='int16')
+    stream.start()
 
+    while True : 
+
+        if not mode_écoute : 
+            lecture, _ = stream.read(1280)
+            convert = lecture[:,0]
+            prediction = wakeword.predict(convert)
+            score = list(prediction.values())[0] # prediction c'est un dict .values() prend toutes les valeurs list() les met dans une liste, et [0] prend la première donc le score.
+
+            if score > 0.6 : 
+                #Déclencher l'écoute
+                print('Hey Jarvis detecté !')
+                wakeword.reset()
+                retour = capter_phrase(stream)
+                réponse_finie.clear()
+                tapis.put(retour)
+                mode_écoute = True
+                if 'Au revoir' in retour or 'au revoir' in retour :
+                    mode_écoute = False # Mode veille
+
+        elif mode_écoute : 
+            réponse_finie.wait() # On attend que les threads soient synchros pour pouvoir passer à la suite 
+            retour = capter_phrase(stream)
+            réponse_finie.clear()
+            tapis.put(retour)
+            if 'Au revoir' in retour or 'au revoir' in retour :
+                    mode_écoute = False # Mode veille 
+        
 def capter_phrase(stream) : 
 
     # cartesiastt = cartesia.stt.websocket_connect().__enter__() # Le enter permet d'éviter un with compliqué (le with ferme le tunnel automatiquement)
@@ -308,6 +339,7 @@ def capter_phrase(stream) :
         threadevent.join()
 
     return transcript
+
 
 fil_écoute = threading.Thread(target=interruption)
 fil_écoute.start()
