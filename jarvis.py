@@ -244,107 +244,70 @@ def réponses_en_phrases(question) :
     if len(historique) > 20 :
         historique = historique[-20:]
 
-def capter_phrase(stream) :
-        # Ouvre un websocket Cartesia STT, envoie l'audio tant que le VAD détecte de la voix,
-        # et retourne le transcript une fois le silence détecté.
-        vad_model.reset_states()
-        stt_client = Cartesia(api_key=os.environ["CARTESIA_API_KEY"])
-        transcript = ""
-        envoyé = 0
-        silence = 0
-        stt_fini = False
+# TODO : capter_phrase(stream) et interruption()
 
-        with stt_client.stt.auto_finalize.websocket(
-            model="ink-2",
-            encoding="pcm_s16le",
-            sample_rate=16000,
-        ) as ws:
-            print("[websocket ouvert]")
 
-            turn_en_cours = ""
 
-            def écouter_events():
-                nonlocal transcript, stt_fini, turn_en_cours
-                for event in ws:
-                    if event.type == "turn.update":
-                        turn_en_cours = event.transcript or turn_en_cours
-                        print(f"[stt update] {turn_en_cours}")
-                    elif event.type == "turn.end":
-                        turn_en_cours = event.transcript or turn_en_cours
-                        transcript += " " + turn_en_cours if transcript else turn_en_cours
-                        print(f"[stt end] {transcript}")
-                        turn_en_cours = ""
-                        stt_fini = True
-                    elif event.type == "error":
-                        print(f"[stt error] {event.message}")
+def capter_phrase(stream) : 
 
-            fil_stt = threading.Thread(target=écouter_events, daemon=True)
-            fil_stt.start()
+    # cartesiastt = cartesia.stt.websocket_connect().__enter__() # Le enter permet d'éviter un with compliqué (le with ferme le tunnel automatiquement)
+    # Le soucis c'est que l'ouvrir en continu consomme des token et les transcript vont se chevaucher
+    vad_model.reset_states()
+    transcript = ""
+    silence = 0 
+    envoi = 0 
+    eager = False
 
-            attente_initiale = 0
-            while True :
-                bloc, _ = stream.read(512)
-                tensor = torch.from_numpy(bloc[:, 0].copy()).float() / 32768.0
-                score = vad_model(tensor, 16000).item()
-                print(f"[vad] {score:.2f}")
+    with cartesia.stt.auto_finalize.websocket(
+    model="ink-2",
+    encoding="pcm_s16le",
+    sample_rate=16000
+    ) as ws:
+        
+        def event() : 
+            nonlocal eager
+            nonlocal transcript
 
-                if score > 0.9 :
-                    ws.send_raw(bloc[:, 0].astype(numpy.int16).tobytes())
-                    envoyé += 1
-                    silence = 0
-                    stt_fini = False
+            for events in ws:
+                if events.type == "turn.eager_end" : 
+                     eager = True
+                if events.type == "turn.end":
+                    text = events.transcript
+                    transcript += text # Stocker le retour si il y a une fin de STT
+                elif events.type == "error":
+                    raise RuntimeError(events.message)
+                if events.type == "turn.resume" : 
+                    if eager : 
+                        # Il attend la suite de ta phrase
+                        print("{ Le frérot attend la suite de ta phrase..}")
+        
+        threadevent = threading.Thread(target=event)
+        threadevent.start()
 
-                elif envoyé > 10 :
-                    ws.send_raw(bloc[:, 0].astype(numpy.int16).tobytes())
-                    silence += 1
-                    if stt_fini or silence > 40 :
-                        break
+        while True : 
 
-                elif envoyé == 0 :
-                    attente_initiale += 1
-                    if attente_initiale > 90 :
-                        print("[stt timeout] pas de voix détectée, fermeture")
-                        break
+            # Le micro donne du numpy en int16. 
+            # On le convertit en tensor float et on divise par 32768.0 pour que les valeurs soient entre -1 et 1. 
+            # Ensuite on passe le tensor + le sample rate au modèle et il renvoie la probabilité qu'il y ait de la voix. 
+            # Le .item() c'est juste pour transformer le résultat en float python normal pour pouvoir faire un if dessus.
 
-            print(f"[envoyé: {envoyé}, silence: {silence}]")
-            fil_stt.join(timeout=5)
-            if not transcript and turn_en_cours:
-                transcript = turn_en_cours
-            print(f"[transcript final] {transcript}")
-            print(f"[t_stt_fin] {time.time():.3f}")
+            bloc, _ = stream.read(512) 
+            tensor = torch.from_numpy(bloc[:,0].copy()).float() / 32768.0 # Transformer en float entre -1 ~ 1 
+            # bloc est un objet 2D à 2 colonnes j'ai besoin de la première donc je masque la seconde avec 0
+            score = vad_model(tensor, 16000).item()
 
-        return transcript
+            if score > 0.9 : 
+                ws.send_raw(bloc[:,0].tobytes())
+                envoi += 1 
+                silence = 0 
+            if score < 0.5 : 
+                silence +=1  
+                if silence > 20 and envoi > 1  : 
+                    break 
+        
+        threadevent.join()
 
-def interruption() :
-        global mode_écoute
-
-        stream = sounddevice.InputStream(samplerate=16000, channels=1, dtype='int16', device=4)
-        stream.start()
-
-        while True :
-            if not mode_écoute :
-                bloc, _ = stream.read(1280)
-                audio_ww = bloc[:, 0].astype(numpy.int16)
-                prediction = wakeword.predict(audio_ww)
-                score_ww = list(prediction.values())[0]
-                print(f"score_ww: {score_ww}", end="\r")
-                if score_ww > 0.6 :
-                    mode_écoute = True
-                    wakeword.reset()
-                    print("[wake word détecté]")
-                    transcript = capter_phrase(stream)
-                    réponse_finie.clear()
-                    print(f"[t_avant_tapis] {time.time():.3f}")
-                    tapis.put(transcript)
-
-            else :
-                # Attend que Hermes finisse de parler avant de réécouter
-                réponse_finie.wait()
-                transcript = capter_phrase(stream)
-                réponse_finie.clear()
-                print(f"[t_avant_tapis] {time.time():.3f}")
-                tapis.put(transcript)
-
+    return transcript
 
 fil_écoute = threading.Thread(target=interruption)
 fil_écoute.start()
