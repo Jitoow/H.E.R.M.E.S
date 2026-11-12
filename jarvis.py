@@ -146,6 +146,7 @@ def réponses_en_phrases(question) :
     def phrasedattente(): 
         if  premier_token is None : 
             boite.put(random.choice(phrases_attente))
+
     # Le thread est lancé ici et il attend au niveau de loupe pour la boite se remplisse. 
     # Pendant ce temps le code continue d'être exécuté.
     
@@ -348,7 +349,7 @@ def interruption() :
 fil_écoute = threading.Thread(target=interruption)
 fil_écoute.start()
 
-def animation() :
+def animation() : # Fonction animation des yeux reprise depuis un script trouvé sur internet
 
     startup()
     global continuer
