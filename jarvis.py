@@ -2,6 +2,7 @@ import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'yeux'))
 from dotenv import load_dotenv
 from cartesia import Cartesia
+from anthropic import Anthropic
 from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
 from openwakeword.model import Model
 from robot_eyes_engine_py import RobotEyes
@@ -83,8 +84,8 @@ def dire_cartesia(reponsedeclaude) :
     hermes = connexion_cartesia.context(
             model_id="sonic-3.6",
             #voice="577d7fe9-886b-4f73-b308-0244b0c0b7f1", voix jarvis v1
-            #voice="996ec149-0dca-4389-ad08-e2d6f906b4bf", voix française basique
-            voice="b4d5ab22-e14c-4684-925d-48cd241b3a3a",
+            voice="996ec149-0dca-4389-ad08-e2d6f906b4bf",
+            #voice="b4d5ab22-e14c-4684-925d-48cd241b3a3a",
             language='fr',
             output_format={
                 "container": "raw",
@@ -126,12 +127,16 @@ def réponses_en_phrases(question) :
     print(f"[t_début_réponses] {time.time():.3f}")
 
     # def promptcachingchasser(): 
-    for clés in historique[:-1] : # Nettoyer le cache control mais jcrois que ça craint parce que ça risque de supprimer le cache control du début non ?  
-        clés.pop("cache_control", None)
-    historique.append({"role": "user", "content": question})
-    historique[-1]["cache_control"] = {"type": "ephemeral"} # Le prompt caching pour l'historique aussi (uniquement le dernier)
-    # Le -1 sert à placer ce cache control en tant que dernier élément du dico pour qu'il puisse cacher tout ce qu'il y a derrière lui
-    # Si jamais celui ci était placé en position 3 claude lirait les messages après le 3 ème ce qui est assez chiant..
+    # On nettoie les anciens messages : si le content est un bloc (liste) on le remet en string simple
+    # Comme ça le cache_control de l'ancien message disparaît seul le dernier message garde le cache
+    for clés in historique[:-1] :
+        if isinstance(clés["content"], list) :
+            clés["content"] = clés["content"][0]["text"]
+    # Le content est un bloc (liste de dicts) au lieu d'une string pour pouvoir mettre cache_control dedans
+    # Avant : {"role": "user", "content": "salut", "cache_control": {...}}  bah l'API refuse
+    # Maintenant : {"role": "user", "content": [{"type": "text", "text": "salut", "cache_control": {...}}]} hop l'API accepte
+    # En gros fallait grouper le content et le cache_control
+    historique.append({"role": "user", "content": [{"type": "text", "text": question, "cache_control": {"type": "ephemeral"}}]})
 
     def loupe():
         while True:
@@ -249,36 +254,58 @@ def réponses_en_phrases(question) :
 
 def interruption(): 
     global mode_écoute
-    stream = sounddevice.InputStream(samplerate=16000, device=14, channels=1, dtype='int16')
+    stream = sounddevice.InputStream(samplerate=16000, device=4, channels=1, dtype='int16')
     stream.start()
 
     while True : 
 
-        if not mode_écoute : 
-            lecture, _ = stream.read(1280)
-            convert = lecture[:,0]
-            prediction = wakeword.predict(convert)
-            score = list(prediction.values())[0] # prediction c'est un dict .values() prend toutes les valeurs list() les met dans une liste, et [0] prend la première donc le score.
+            if not mode_écoute : 
+                lecture, _ = stream.read(1280)
+                convert = lecture[:,0]
+                prediction = wakeword.predict(convert)
+                score = list(prediction.values())[0] # prediction c'est un dict .values() prend toutes les valeurs list() les met dans une liste, et [0] prend la première donc le score.
 
-            if score > 0.6 : 
-                #Déclencher l'écoute
-                print('Hey Jarvis detecté !')
-                wakeword.reset()
+                if score > 0.6 : 
+                    #Déclencher l'écoute
+                    print('Hey Jarvis detecté !')
+                    wakeword.reset()
+                    retour = capter_phrase(stream)
+                    if retour and retour.strip() : # strip pour supprimer les espaces et vérifier qu'il y a du texte (parce que si j'envoi du vide à claude c'est relou..)
+                        réponse_finie.clear()
+                        tapis.put(retour)
+                        mode_écoute = True
+                        if 'Au revoir' in retour or 'au revoir' in retour or 'ciao' in retour or 'Ciao' in retour :
+                            mode_écoute = False # Mode veille
+
+            elif mode_écoute : 
+                # réponse_finie.wait() # On attend que les threads soient synchros pour pouvoir passer à la suite 
+                # TODO ajouter la partie interruption de Hermes
+                while True : 
+
+                # Le micro donne du numpy en int16. 
+                # On le convertit en tensor float et on divise par 32768.0 pour que les valeurs soient entre -1 et 1. 
+                # Ensuite on passe le tensor + le sample rate au modèle et il renvoie la probabilité qu'il y ait de la voix. 
+                # Le .item() c'est juste pour transformer le résultat en float python normal pour pouvoir faire un if dessus.
+
+                    bloc, _ = stream.read(512) 
+                    tensor = torch.from_numpy(bloc[:,0].copy()).float() / 32768.0 # Transformer en float entre -1 ~ 1 
+                    # bloc est un objet 2D à 2 colonnes j'ai besoin de la première donc je masque la seconde avec 0
+                    score = vad_model(tensor, 16000).item()
+                    print(f"[VAD] {score:.3f}", end="\r")
+
+                    if score > 0.9 : 
+                        if player_actuel : 
+                            player_actuel.kill()
+                            break
+                    if réponse_finie.is_set() : # Si il a finit de parler on sort du while
+                        break 
+                
                 retour = capter_phrase(stream)
-                réponse_finie.clear()
-                tapis.put(retour)
-                mode_écoute = True
-                if 'Au revoir' in retour or 'au revoir' in retour :
-                    mode_écoute = False # Mode veille
-
-        elif mode_écoute : 
-            réponse_finie.wait() # On attend que les threads soient synchros pour pouvoir passer à la suite 
-            retour = capter_phrase(stream)
-            réponse_finie.clear()
-            tapis.put(retour)
-            if 'Au revoir' in retour or 'au revoir' in retour :
-                    mode_écoute = False # Mode veille
-            # TODO ajouter la partie interruption de Hermes
+                if retour and retour.strip() : # Même chose ici ! 
+                    réponse_finie.clear()
+                    tapis.put(retour)
+                    if 'Au revoir' in retour or 'au revoir' in retour or 'ciao' in retour or 'Ciao' in retour :
+                            mode_écoute = False # Mode veille
         
 def capter_phrase(stream) : 
 
@@ -302,15 +329,19 @@ def capter_phrase(stream) :
 
             for events in ws:
                 if events.type == "turn.eager_end" : 
-                     eager = True
+                    print(events.type) 
+                    eager = True
                 if events.type == "turn.end":
+                    print(events.type) 
                     text = events.transcript
                     transcript += text # Stocker le retour si il y a une fin de STT
                 elif events.type == "error":
                     raise RuntimeError(events.message)
                 if events.type == "turn.resume" : 
+                    print(events.type) 
                     if eager : 
                         # Il attend la suite de ta phrase
+                        print(events.type) 
                         print("{ Le frérot attend la suite de ta phrase..}")
         
         threadevent = threading.Thread(target=event)
@@ -327,6 +358,7 @@ def capter_phrase(stream) :
             tensor = torch.from_numpy(bloc[:,0].copy()).float() / 32768.0 # Transformer en float entre -1 ~ 1 
             # bloc est un objet 2D à 2 colonnes j'ai besoin de la première donc je masque la seconde avec 0
             score = vad_model(tensor, 16000).item()
+            print(f"[VAD] {score:.3f}", end="\r")
 
             if score > 0.9 : 
                 ws.send_raw(bloc[:,0].tobytes())
@@ -335,8 +367,9 @@ def capter_phrase(stream) :
             if score < 0.5 : 
                 silence +=1  
                 if silence > 20 and envoi > 1  : 
-                    break 
-        
+                    break
+
+        ws.send({"type": "close"})
         threadevent.join()
 
     return transcript
@@ -406,7 +439,7 @@ while True :
             continue
 
         print(f"[t_reçu_tapis] {time.time():.3f}")
-        print(f"[entendu] {ecrit}")
+        print(f"Transcription {ecrit}")
 
         if "au revoir" in ecrit.lower():
             dire_cartesia("Au revoir, Monsieur.")
