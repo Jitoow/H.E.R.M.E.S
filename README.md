@@ -33,7 +33,7 @@ config.py        → tout ce qui est partagé entre les modules
 ```bash
 cd IA
 source .venv/bin/activate
-python3 main.py
+python3 jarvis.py
 ```
 
 ## Dépendances
