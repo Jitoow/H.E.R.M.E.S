@@ -12,7 +12,7 @@ L'idée c'est un assistant qui écoute, comprend et répond à voix haute... le 
 4. **LLM** — Claude Haiku 5.5 avec prompt caching... il peut chercher sur le web et donner l'heure aussi
 5. **TTS** — Cartesia sonic-3.6 en streaming... il commence à parler avant même d'avoir fini de réfléchir
 
-## Les fichiers
+## Les fichiers (claude m'a séparé tout ça)
 
 ```
 main.py          → la boucle principale + les animations des yeux
@@ -20,6 +20,7 @@ oreille.py       → le micro, wake word, VAD, STT temps réel
 cerveau.py       → Claude API, streaming, découpage en phrases, tool use
 voix.py          → TTS Cartesia → ffplay via pipe
 config.py        → tout ce qui est partagé entre les modules
+jarvis.py        → c'est ici que tout a commencé ! Et que j'edit encore...
 ```
 
 ## Le matos
